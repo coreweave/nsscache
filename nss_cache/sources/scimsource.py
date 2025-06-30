@@ -168,6 +168,15 @@ class PasswdUpdateGetter(UpdateGetter):
     def CreateMap(self):
         """Returns a new PasswdMap instance to have PasswdMapEntries added to
         it."""
+        scim_path_username = self.conf.get("path_username")
+        scim_path_uid = self.conf.get("path_uid")
+        scim_path_gid = self.conf.get("path_gid")
+        scim_path_home_directory = self.conf.get("path_home_directory")
+        scim_path_login_shell = self.conf.get("path_login_shell")
+
+        if not scim_path_gid or not scim_path_uid or not scim_path_username or not scim_path_home_directory or not scim_path_login_shell:
+            raise error.ConfigurationError("The following configuration (scim_path_username, scim_path_uid, scim_path_gid, scim_path_home_directory, scim_path_login_shell) is required for the passwd map but not set in [passwd] section")
+    
         return passwd.PasswdMap()
 
 class GroupUpdateGetter(UpdateGetter):
@@ -185,6 +194,11 @@ class GroupUpdateGetter(UpdateGetter):
     def CreateMap(self):
         """Returns a new GroupMap instance to have GroupMapEntries added to
         it."""
+        scim_path_gid = self.conf.get("path_gid")
+
+        if not scim_path_gid:
+            raise error.ConfigurationError("scim_path_gid configuration is required for group id extraction but not set in [group] section")
+        
         return group.GroupMap()
 
 class SshkeyUpdateGetter(UpdateGetter):
@@ -390,8 +404,7 @@ class ScimPasswdMapParser(ScimMapParser):
     def _ExtractGid(self, user_data):
         """Extract GID using configurable path."""
         gid_path = self._GetMapConfig("scim_path_gid", "")
-        
-        # Try the configured path first
+
         if gid_path:
             value = self._ExtractFromPath(user_data, gid_path)
             if value is not None:
@@ -563,6 +576,7 @@ class ScimGroupMapParser(ScimMapParser):
                 
         return None
 
+    # TODO: This could probably be improved with the proper reponse that is gotten
     def _ExtractGroupMembers(self, group_data):
         """Extract group members from SCIM group data using configurable path."""
         members_path = self._GetMapConfig("scim_path_username", "members")
