@@ -656,51 +656,38 @@ class ScimGroupMapParser(ScimMapParser):
 
         return None
 
-    # TODO: This could probably be improved with the proper reponse that is gotten
     def _ExtractGroupMembers(self, group_data):
         """Extract group members from SCIM group data using configurable path."""
-        members_path = self._GetMapConfig("scim_path_username", "members")
+        username_path = self._GetMapConfig("scim_path_username", "userName")
         members = []
 
-        # Try the configured path first
-        if members_path:
-            # Handle different member path configurations
-            if members_path == "members/value":
-                # Special case for members array with value field
-                group_members = group_data.get("members", [])
-                for member in group_members:
-                    if isinstance(member, dict):
-                        username = member.get("value")
-                        if username:
-                            members.append(username)
-            else:
-                # General path extraction
-                member_data = self._ExtractFromPath(group_data, members_path, [])
-                if isinstance(member_data, list):
-                    for member in member_data:
-                        if isinstance(member, str):
-                            members.append(member)
-                        elif isinstance(member, dict):
-                            # Try common member fields
-                            username = (member.get("displayName") or
-                                       member.get("value") or
-                                       member.get("userName"))
-                            if username:
-                                members.append(username)
-                elif isinstance(member_data, str):
-                    members.append(member_data)
-        else:
-            # Fallback to standard SCIM members structure
-            group_members = group_data.get("members", [])
+        # Parse the username path to handle nested structures like "members/userName"
+        if "/" in username_path:
+            parts = username_path.split("/", 1)
+            members_key = parts[0]
+            username_key = parts[1]
+            
+            # Get the members array from the group data
+            group_members = group_data.get(members_key, [])
+            
             for member in group_members:
                 if isinstance(member, dict):
-                    # Member can have different formats
-                    username = (member.get("displayName") or
-                               member.get("value") or
-                               member.get("$ref", "").split("/")[-1])
+                    # Extract username using the remaining path
+                    username = self._ExtractFromPath(member, username_key)
+                    if username:
+                        members.append(username)
+        else:
+            # Handle simple case where username_path is just a field name
+            group_members = group_data.get("members", [])
+            
+            for member in group_members:
+                if isinstance(member, dict):
+                    # Extract username using the configured path
+                    username = self._ExtractFromPath(member, username_path)
                     if username:
                         members.append(username)
                 elif isinstance(member, str):
+                    # If member is already a string, use it directly
                     members.append(member)
 
         return members
