@@ -47,6 +47,7 @@ class ScimSource(source.Source):
     RETRY_DELAY = 5
     RETRY_MAX = 3
     DEFAULT_SHELL = "/bin/bash"
+    ITEMS_PER_PAGE = 50
 
     # for registration
     name = "scim"
@@ -93,6 +94,8 @@ class ScimSource(source.Source):
             configuration["retry_max"] = self.RETRY_MAX
         if "default_shell" not in configuration:
             configuration["default_shell"] = self.DEFAULT_SHELL
+        if "items_per_page" not in configuration:
+            configuration["items_per_page"] = self.ITEMS_PER_PAGE
         if "auth_token" not in configuration:
             configuration["auth_token"] = os.environ.get('NSSCACHE_SCIM_AUTH_TOKEN', self.AUTH_TOKEN)
     def GetPasswdMap(self, since=None):
@@ -140,7 +143,7 @@ class UpdateGetter(HttpUpdateGetter):
     def GetUpdates(self, source, url, since):
         """Get updates from a SCIM source with pagination support.
         
-        Recursively calls itself with ?startIndex={} to fetch all pages.
+        Fetches all pages using SCIM pagination without duplicate requests.
         """
         # Store the source for parser creation
         self.source = source
@@ -154,35 +157,37 @@ class UpdateGetter(HttpUpdateGetter):
         ]
         conn.setopt(pycurl.HTTPHEADER, headers)
 
-        # Get first page and check for pagination
-        first_page = super().GetUpdates(source, url, since)
+        # Get configuration for pagination
+        items_per_page = source.conf.get('items_per_page', 50)
         
-        # Parse response to get totalResults and itemsPerPage for pagination
-        try:
-            (resp_code, _, body_bytes) = curl.CurlFetch(url, conn, self.log)
-            if resp_code == 200:
-                scim_response = json.loads(body_bytes.decode("utf-8"))
-                total_results = scim_response.get("totalResults", 0)
-                items_per_page = scim_response.get("itemsPerPage", 0)
+        # Start with the first page
+        start_index = 1
+        all_results = None
+        
+        while True:
+            # Build URL with pagination parameters
+            separator = "&" if "?" in url else "?"
+            paginated_url = f"{url}{separator}startIndex={start_index}&count={items_per_page}"
+            
+            # Fetch this page
+            page_map = super().GetUpdates(source, paginated_url, since)
+            
+            # Initialize result map from first page
+            if all_results is None:
+                all_results = page_map
+            else:
+                # Add entries from this page to the combined results
+                for entry in page_map:
+                    all_results.Add(entry)
+            
+            # Check if we got fewer results than requested (last page)
+            if len(page_map) < items_per_page:
+                break
                 
-                # Simple pagination: while total_results > items_per_page, fetch more pages  
-                if total_results > items_per_page and items_per_page > 0:
-                    start_index = items_per_page + 1
-                    while start_index <= total_results:
-                        separator = "&" if "?" in url else "?"
-                        paginated_url = f"{url}{separator}startIndex={start_index}"
-                        
-                        # Recursively call to get next page
-                        page_map = super().GetUpdates(source, paginated_url, since)
-                        for entry in page_map:
-                            first_page.Add(entry)
-                            
-                        start_index += items_per_page
-                        
-        except Exception as e:
-            self.log.debug("Pagination failed, using single page: %s", e)
+            # Move to next page
+            start_index += items_per_page
         
-        return first_page
+        return all_results
 
 class PasswdUpdateGetter(UpdateGetter):
     """Get passwd updates."""
