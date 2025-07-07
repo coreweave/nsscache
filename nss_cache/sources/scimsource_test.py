@@ -130,47 +130,68 @@ class TestScimUpdateGetter(unittest.TestCase):
         self.curl_mock = curl_patcher.start()
 
     def testGetUpdatesWithPagination(self):
-        """Test that pagination works correctly."""
+        """Test that pagination works correctly by reading from SCIM response."""
         mock_conn = mock.Mock()
         mock_conn.getinfo.return_value = 200
         self.curl_mock.return_value = mock_conn
         
         config = {
             "base_url": "https://api.example.com/scim",
-            "auth_token": "test_token",
-            "items_per_page": 50
+            "auth_token": "test_token"
         }
         source = scimsource.ScimSource(config)
         
-        getter = scimsource.UpdateGetter()
-        getter.source = source
-        getter.GetParser = mock.Mock()
-        getter.CreateMap = mock.Mock(return_value=mock.Mock())
+        # Mock the first page response with pagination info
+        first_page_response = {
+            "totalResults": 75,
+            "itemsPerPage": 50,
+            "startIndex": 1,
+            "Resources": [{"id": str(i), "userName": f"user{i}"} for i in range(1, 51)]
+        }
         
-        # Mock super().GetUpdates to return mock maps
-        with mock.patch.object(scimsource.HttpUpdateGetter, 'GetUpdates') as mock_super:
-            # First page returns 50 items (full page), second page returns 25 items (partial page)
+        # Mock the second page response
+        second_page_response = {
+            "totalResults": 75,
+            "itemsPerPage": 25,
+            "startIndex": 51,
+            "Resources": [{"id": str(i), "userName": f"user{i}"} for i in range(51, 76)]
+        }
+        
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.side_effect = [
+                (200, "", json.dumps(first_page_response).encode('utf-8')),
+                (200, "", json.dumps(second_page_response).encode('utf-8'))
+            ]
+            
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+            getter.GetParser = mock.Mock(return_value=mock.Mock())
+            getter.CreateMap = mock.Mock()
+            
+            # Mock the GetMap method to return mock maps
             mock_first_map = mock.Mock()
             mock_first_map.Add = mock.Mock(return_value=True)
             mock_first_map.__len__ = mock.Mock(return_value=50)
+            mock_first_map.__iter__ = mock.Mock(return_value=iter([mock.Mock() for _ in range(50)]))
             
             mock_second_map = mock.Mock()
-            mock_second_map.__iter__ = mock.Mock(return_value=iter([mock.Mock()]))
             mock_second_map.__len__ = mock.Mock(return_value=25)
+            mock_second_map.__iter__ = mock.Mock(return_value=iter([mock.Mock() for _ in range(25)]))
             
-            mock_super.side_effect = [mock_first_map, mock_second_map]
+            getter.GetMap = mock.Mock(side_effect=[mock_first_map, mock_second_map])
             
             result = getter.GetUpdates(source, "https://api.example.com/scim/Users", None)
             
-            # Should call super().GetUpdates twice (first page + second page)
-            self.assertEqual(mock_super.call_count, 2)
+            # Should call CurlFetch twice (first page + second page)
+            self.assertEqual(mock_curl_fetch.call_count, 2)
+            
+            # Should call GetMap twice (first page + second page)  
+            self.assertEqual(getter.GetMap.call_count, 2)
             
             # Verify the URLs include pagination parameters
-            call_args = mock_super.call_args_list
-            self.assertIn("startIndex=1", call_args[0][0][1])
-            self.assertIn("count=50", call_args[0][0][1])
-            self.assertIn("startIndex=51", call_args[1][0][1])
-            self.assertIn("count=50", call_args[1][0][1])
+            call_args = mock_curl_fetch.call_args_list
+            self.assertIn("startIndex=1", call_args[0][0][0])
+            self.assertIn("startIndex=51", call_args[1][0][0])
 
 
 class TestScimPasswdUpdateGetter(unittest.TestCase):
