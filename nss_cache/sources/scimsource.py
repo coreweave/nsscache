@@ -138,82 +138,38 @@ class UpdateGetter(HttpUpdateGetter):
         ]
         conn.setopt(pycurl.HTTPHEADER, headers)
 
-        # Start with the first page
-        start_index = 1
-        all_results = None
+        # Initialize the parser with the source
+        parser = ScimMapParser(self.source)
         
-        while True:
-            # Build URL with pagination parameters
+        scim_body_bytes, _ = self.FetchUrlData(source, url, since)
+
+        # Parse this page using GetMap which will also capture pagination metadata
+        page_map = parser.GetMap(cache_info=scim_body_bytes, data=self.CreateMap())
+        
+        # Get pagination metadata from the parser
+        pagination_metadata = getattr(parser, '_pagination_metadata', {})
+        total_results = pagination_metadata.get('totalResults', 0)
+        items_per_page = pagination_metadata.get('itemsPerPage', 0)
+        current_start_index = pagination_metadata.get('startIndex', 1)
+        
+        while len(page_map) < total_results:
+            start_index = current_start_index + items_per_page
             separator = "&" if "?" in url else "?"
             paginated_url = f"{url}{separator}startIndex={start_index}"
+
+            scim_body_bytes, _ = self.FetchUrlData(source, paginated_url, since)
+
+            page_map = parser.GetMap(cache_info=scim_body_bytes, data=page_map)
+
+            # Update pagination metadata
+            pagination_metadata = getattr(parser, '_pagination_metadata', {})
+            current_start_index = pagination_metadata.get('startIndex', 1)
             
-            # Fetch raw response (don't let base class parse it yet)
-            try:
-                source.log.debug("fetching %s", paginated_url)
-                (resp_code, headers_text, body_bytes) = curl.CurlFetch(paginated_url, conn, self.log)
-                self.log.debug("response code: %s", resp_code)
-                
-                if resp_code != 200:
-                    if start_index == 1:
-                        # First page failed, let base class handle retry logic
-                        return super().GetUpdates(source, url, since)
-                    else:
-                        # Subsequent page failed, stop pagination
-                        break
-                
-                # Parse SCIM response to get pagination info
-                scim_response = json.loads(body_bytes.decode("utf-8"))
-                total_results = scim_response.get("totalResults", 0)
-                items_per_page = scim_response.get("itemsPerPage", 0)
-                current_start_index = scim_response.get("startIndex", 1)
-                resources = scim_response.get("Resources", [])
-                
-                # Convert back to the format expected by base class parser
-                response_io = StringIO(body_bytes.decode("utf-8"))
-                
-                # Parse this page using base class logic
-                page_map = self.GetMap(cache_info=response_io)
-                
-                # Initialize result map from first page
-                if all_results is None:
-                    all_results = page_map
-                else:
-                    # Add entries from this page to the combined results
-                    for entry in page_map:
-                        all_results.Add(entry)
-                
-                # Check if we have more pages
-                # Use the actual number of resources returned vs itemsPerPage
-                if len(resources) < items_per_page or len(resources) == 0:
-                    # This was the last page
-                    break
-                
-                # Check if we've reached the total
-                if total_results > 0 and current_start_index + len(resources) - 1 >= total_results:
-                    # We've got all the results
-                    break
-                
-                # Move to next page
-                start_index = current_start_index + items_per_page
-                
-            except json.JSONDecodeError as e:
-                self.log.error("Failed to parse SCIM JSON response: %s", e)
-                if start_index == 1:
-                    # First page failed, let base class handle it
-                    return super().GetUpdates(source, url, since)
-                else:
-                    # Subsequent page failed, stop pagination  
-                    break
-            except Exception as e:
-                self.log.error("Error during SCIM pagination: %s", e)
-                if start_index == 1:
-                    # First page failed, let base class handle it
-                    return super().GetUpdates(source, url, since)
-                else:
-                    # Subsequent page failed, stop pagination
-                    break
-        
-        return all_results or self.CreateMap()
+            # Move to next page
+            start_index = current_start_index + items_per_page
+
+
+        return page_map or self.CreateMap()
 
 class PasswdUpdateGetter(UpdateGetter):
     """Get passwd updates."""
@@ -291,6 +247,8 @@ class ScimMapParser(object):
     def __init__(self, source=None):
         self.log = logging.getLogger(__name__)
         self.source = source
+        self._store_pagination_metadata = True
+        self._pagination_metadata = {}
 
     def _GetMapConfig(self, key, default=None):
         """Get configuration value from map-specific section, fallback to [DEFAULT].
@@ -358,6 +316,13 @@ class ScimMapParser(object):
         try:
             # Parse the SCIM JSON response
             scim_response = json.loads(cache_info.read())
+
+            # Store pagination metadata
+            self._pagination_metadata = {
+                'totalResults': scim_response.get('totalResults', 0),
+                'itemsPerPage': scim_response.get('itemsPerPage', 0),
+                'startIndex': scim_response.get('startIndex', 1),
+            }
 
             # SCIM responses have a "Resources" array
             resources = scim_response.get("Resources", [])
