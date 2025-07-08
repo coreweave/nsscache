@@ -139,35 +139,36 @@ class UpdateGetter(HttpUpdateGetter):
         conn.setopt(pycurl.HTTPHEADER, headers)
 
         # Initialize the parser with the source
-        parser = ScimMapParser(self.source)
+        parser = self.GetParser()
         
-        scim_body_bytes, _ = self.FetchUrlData(source, url, since)
-
-        # Parse this page using GetMap which will also capture pagination metadata
-        page_map = parser.GetMap(cache_info=scim_body_bytes, data=self.CreateMap())
+        # Initialize pagination variables
+        current_start_index = 1
+        page_map = self.CreateMap()
         
-        # Get pagination metadata from the parser
-        pagination_metadata = getattr(parser, '_pagination_metadata', {})
-        total_results = pagination_metadata.get('totalResults', 0)
-        items_per_page = pagination_metadata.get('itemsPerPage', 0)
-        current_start_index = pagination_metadata.get('startIndex', 1)
-        
-        while len(page_map) < total_results:
-            start_index = current_start_index + items_per_page
+        # Use do-while pattern to fetch all pages
+        while True:
+            # Build URL with pagination parameters
             separator = "&" if "?" in url else "?"
-            paginated_url = f"{url}{separator}startIndex={start_index}"
+            paginated_url = f"{url}{separator}startIndex={current_start_index}"
 
+            # Fetch current page
             scim_body_bytes, _ = self.FetchUrlData(source, paginated_url, since)
-
+            
+            # Parse this page and add to existing map
             page_map = parser.GetMap(cache_info=scim_body_bytes, data=page_map)
-
-            # Update pagination metadata
-            pagination_metadata = getattr(parser, '_pagination_metadata', {})
+            
+            # Get pagination metadata from the parser
+            pagination_metadata = parser._pagination_metadata
+            total_results = pagination_metadata.get('totalResults', 0)
+            items_per_page = pagination_metadata.get('itemsPerPage', 0)
             current_start_index = pagination_metadata.get('startIndex', 1)
             
+            # Check if we have more pages to fetch
+            if current_start_index + items_per_page - 1 >= total_results:
+                break
+            
             # Move to next page
-            start_index = current_start_index + items_per_page
-
+            current_start_index = current_start_index + items_per_page
 
         return page_map or self.CreateMap()
 
