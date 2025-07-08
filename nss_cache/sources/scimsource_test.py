@@ -1,21 +1,4 @@
-# Copyright 2025 Google Inc.
-#
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software Foundation,
-# Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Unit tests for SCIM data source for nsscache."""
-
-__author__ = "tbecker@coreweave.com (Tyler Becker)"
 
 import json
 import os
@@ -395,7 +378,7 @@ class TestScimPasswdMapParser(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry.name, "testuser")
         self.assertEqual(entry.uid, 1001)
-        self.assertEqual(entry.gid, 1001)  # Should default to UID
+        self.assertEqual(entry.gid, 1001)
         self.assertEqual(entry.dir, "/home/testuser")
         self.assertEqual(entry.shell, "/bin/bash")
         self.assertEqual(entry.gecos, "Test User")
@@ -491,6 +474,92 @@ class TestScimGroupMapParser(unittest.TestCase):
         entry = self.parser._ReadEntry(group_data)
         
         self.assertIsNone(entry)
+
+    def testReadEntryWithNestedMemberPath(self):
+        """Test _ReadEntry with nested member path like 'members/username'."""
+        self.mock_source.conf["path_username"] = "members/username"
+        
+        group_data = {
+            "id": "2003",
+            "displayName": "testgroup3",
+            "members": [
+                {"username": "user5", "display": "User Five"},
+                {"username": "user6", "display": "User Six"}
+            ]
+        }
+        
+        entry = self.parser._ReadEntry(group_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testgroup3")
+        self.assertEqual(entry.gid, 2003)
+        self.assertEqual(entry.members, ["user5", "user6"])
+
+    def testReadEntryWithSimpleMemberPath(self):
+        """Test _ReadEntry with simple member path (no slash)."""
+        self.mock_source.conf["path_username"] = "userName"
+        
+        group_data = {
+            "id": "2004",
+            "displayName": "testgroup4",
+            "members": [
+                {"userName": "user7"},
+                {"userName": "user8"}
+            ]
+        }
+        
+        entry = self.parser._ReadEntry(group_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testgroup4")
+        self.assertEqual(entry.gid, 2004)
+        self.assertEqual(entry.members, ["user7", "user8"])
+
+    def testReadEntryWithStringMembers(self):
+        """Test _ReadEntry with string members."""
+        self.mock_source.conf["path_username"] = "userName"
+        
+        group_data = {
+            "id": "2005",
+            "displayName": "testgroup5",
+            "members": ["user9", "user10"]
+        }
+        
+        entry = self.parser._ReadEntry(group_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testgroup5")
+        self.assertEqual(entry.gid, 2005)
+        self.assertEqual(entry.members, ["user9", "user10"])
+
+    def testReadEntryWithEmptyMembers(self):
+        """Test _ReadEntry with empty members array."""
+        group_data = {
+            "id": "2006",
+            "displayName": "testgroup6",
+            "members": []
+        }
+        
+        entry = self.parser._ReadEntry(group_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testgroup6")
+        self.assertEqual(entry.gid, 2006)
+        self.assertEqual(entry.members, [])
+
+    def testReadEntryWithMissingMembers(self):
+        """Test _ReadEntry with missing members field."""
+        group_data = {
+            "id": "2007",
+            "displayName": "testgroup7"
+        }
+        
+        entry = self.parser._ReadEntry(group_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testgroup7")
+        self.assertEqual(entry.gid, 2007)
+        self.assertEqual(entry.members, [])
 
 
 if __name__ == "__main__":
