@@ -865,7 +865,9 @@ class PasswdUpdateGetter(UpdateGetter):
             pw.uid = int(pw.uid + self.conf["offset"])
             pw.gid = int(pw.gid + self.conf["offset"])
 
-        if self.conf.get("home_dir"):
+        if "override_home_dir" in self.conf:
+            pw.dir = self.conf.get("override_home_dir", "").replace("%u", pw.name)
+        elif self.conf.get("home_dir"):
             pw.dir = "/home/%s" % pw.name
         elif "unixHomeDirectory" in obj:
             pw.dir = obj["unixHomeDirectory"][0]

@@ -219,6 +219,14 @@ useful on bastion hosts or to ensure uniformity. Enable for
 Active Directory since the attribute (loginShell) is not default.
 
 .TP
+.B ldap_override_home_dir
+If specified, set every user's home directory to the given value.
+Use %%u to substitute the username (optional). For example, /mnt/home/%%u would
+set user "john" to /mnt/home/john, while /shared/home would set all users
+to the same directory. This takes precedence over any
+home directory attributes and ldap_home_dir from the LDAP source.
+
+.TP
 .B ldap_default_shell
 Set a default shell for all users if not specified.
 ldap_override_shell and loginShell attributes will
@@ -388,6 +396,14 @@ Number of retries on soft failures before giving up.  Defaults to 3.
 .B scim_default_shell
 Default shell to assign to users if not specified in SCIM data. Defaults to
 .I /bin/bash
+
+.TP
+.B scim_override_home_directory
+If specified in a [passwd] section, set every user's home directory to the
+given value. Use %%u to substitute the username (optional). For example,
+/mnt/home/%%u would set user "john" to /mnt/home/john, while /shared/home
+would set all users to the same directory. This takes precedence over any
+scim_path_home_directory configuration and SCIM response data.
 
 The following path configuration options allow customization of how data is
 extracted from SCIM responses. These can be set per-map in

@@ -1267,6 +1267,100 @@ class TestLdapSource(unittest.TestCase):
             serverctrls=self.compareSPRC(),
         )
 
+    def testGetPasswdMapWithHomeDirectoryOverride(self):
+        test_posix_account = (
+            "cn=test,ou=People,dc=example,dc=com",
+            {
+                "sambaSID": ["S-1-5-21-2127521184-1604012920-1887927527-72713"],
+                "uidNumber": [1000],
+                "gidNumber": [1000],
+                "uid": ["test"],
+                "cn": ["Testguy McTest"],
+                "homeDirectory": ["/home/test"],
+                "loginShell": ["/bin/sh"],
+                "userPassword": ["p4ssw0rd"],
+                "modifyTimestamp": ["20070227012807Z"],
+            },
+        )
+        config = dict(self.config)
+        config["override_home_dir"] = "/mnt/home/%u"
+        attrlist = [
+            "uid",
+            "uidNumber",
+            "gidNumber",
+            "gecos",
+            "cn",
+            "homeDirectory",
+            "loginShell",
+            "fullName",
+            "modifyTimestamp",
+        ]
+        self.ldap_mock.ReconnectLDAPObject.return_value.result3.side_effect = [
+            (ldap.RES_SEARCH_ENTRY, [test_posix_account], None, []),
+            (ldap.RES_SEARCH_RESULT, None, None, []),
+        ]
+
+        source = ldapsource.LdapSource(config)
+        data = source.GetPasswdMap()
+
+        self.assertEqual(1, len(data))
+        first = data.PopItem()
+        self.assertEqual("/mnt/home/test", first.dir)
+        self.ldap_mock.ReconnectLDAPObject.return_value.search_ext.assert_called_with(
+            base=mock.ANY,
+            filterstr=mock.ANY,
+            scope=mock.ANY,
+            attrlist=attrlist,
+            serverctrls=self.compareSPRC(),
+        )
+
+    def testGetPasswdMapWithHomeDirectoryOverrideNoSubstitution(self):
+        test_posix_account = (
+            "cn=test,ou=People,dc=example,dc=com",
+            {
+                "sambaSID": ["S-1-5-21-2127521184-1604012920-1887927527-72713"],
+                "uidNumber": [1000],
+                "gidNumber": [1000],
+                "uid": ["test"],
+                "cn": ["Testguy McTest"],
+                "homeDirectory": ["/home/test"],
+                "loginShell": ["/bin/sh"],
+                "userPassword": ["p4ssw0rd"],
+                "modifyTimestamp": ["20070227012807Z"],
+            },
+        )
+        config = dict(self.config)
+        config["override_home_dir"] = "/shared/home"
+        attrlist = [
+            "uid",
+            "uidNumber",
+            "gidNumber",
+            "gecos",
+            "cn",
+            "homeDirectory",
+            "loginShell",
+            "fullName",
+            "modifyTimestamp",
+        ]
+        self.ldap_mock.ReconnectLDAPObject.return_value.result3.side_effect = [
+            (ldap.RES_SEARCH_ENTRY, [test_posix_account], None, []),
+            (ldap.RES_SEARCH_RESULT, None, None, []),
+        ]
+
+        source = ldapsource.LdapSource(config)
+        data = source.GetPasswdMap()
+
+        self.assertEqual(1, len(data))
+        first = data.PopItem()
+        self.assertEqual("/shared/home", first.dir)
+        self.ldap_mock.ReconnectLDAPObject.return_value.search_ext.assert_called_with(
+            base=mock.ANY,
+            filterstr=mock.ANY,
+            scope=mock.ANY,
+            attrlist=attrlist,
+            serverctrls=self.compareSPRC(),
+        )
+
 
 class TestUpdateGetter(unittest.TestCase):
     def setUp(self):
