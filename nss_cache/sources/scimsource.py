@@ -511,6 +511,12 @@ class ScimPasswdMapParser(ScimMapParser):
 
     def _ExtractHomeDir(self, user_data):
         """Extract home directory using configurable path."""
+        # Check for override_home_directory first
+        override_home = self._GetMapConfig("override_home_directory", "")
+        if override_home:
+            username = self._ExtractUsername(user_data)
+            return override_home.replace("%u", username) if username else override_home
+
         home_path = self._GetMapConfig("scim_path_home_directory", "")
 
         # Try the configured path first

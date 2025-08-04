@@ -578,6 +578,44 @@ class TestScimPasswdMapParser(unittest.TestCase):
         
         self.assertIsNone(entry)
 
+    def testReadEntryWithHomeDirectoryOverride(self):
+        """Test _ReadEntry with home directory override."""
+        self.mock_source.conf.update({
+            "override_home_directory": "/mnt/home/%u"
+        })
+        user_data = {
+            "id": "1001",
+            "userName": "testuser",
+            "homeDirectory": "/home/testuser",
+            "loginShell": "/bin/bash",
+            "name": {"formatted": "Test User"}
+        }
+
+        entry = self.parser._ReadEntry(user_data)
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.dir, "/mnt/home/testuser")  # Should use override with %u substitution
+
+    def testReadEntryWithHomeDirectoryOverrideNoSubstitution(self):
+        """Test _ReadEntry with home directory override without %u substitution."""
+        self.mock_source.conf.update({
+            "override_home_directory": "/shared/home"
+        })
+        user_data = {
+            "id": "1001",
+            "userName": "testuser",
+            "homeDirectory": "/home/testuser",
+            "loginShell": "/bin/bash",
+            "name": {"formatted": "Test User"}
+        }
+
+        entry = self.parser._ReadEntry(user_data)
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.dir, "/shared/home")  # Should use override as-is without substitution
+
 
 class TestScimSshkeyMapParser(unittest.TestCase):
     def setUp(self):
