@@ -9,6 +9,7 @@ from unittest import mock
 from nss_cache import error
 from nss_cache.maps import group
 from nss_cache.maps import passwd
+from nss_cache.maps import shadow
 from nss_cache.maps import sshkey
 
 from nss_cache.sources import scimsource
@@ -446,6 +447,24 @@ class TestScimSshkeyUpdateGetter(unittest.TestCase):
         self.assertIn("scim_path_ssh_keys configuration is required", str(cm.exception))
 
 
+class TestScimShadowUpdateGetter(unittest.TestCase):
+    def setUp(self):
+        super(TestScimShadowUpdateGetter, self).setUp()
+        self.config = {"path_username": "userName"}
+        self.updater = scimsource.ShadowUpdateGetter(self.config)
+
+    def testGetParser(self):
+        """Test that GetParser returns correct parser type."""
+        self.updater.source = mock.Mock()
+        parser = self.updater.GetParser()
+        self.assertTrue(isinstance(parser, scimsource.ScimShadowMapParser))
+
+    def testCreateMap(self):
+        """Test that CreateMap returns ShadowMap."""
+        shadow_map = self.updater.CreateMap()
+        self.assertTrue(isinstance(shadow_map, shadow.ShadowMap))
+
+
 class TestScimMapParser(unittest.TestCase):
     def setUp(self):
         super(TestScimMapParser, self).setUp()
@@ -778,6 +797,99 @@ class TestScimGroupMapParser(unittest.TestCase):
         self.assertEqual(entry.gid, 2007)
         self.assertEqual(entry.members, [])
 
+
+class TestScimShadowMapParser(unittest.TestCase):
+    def setUp(self):
+        super(TestScimShadowMapParser, self).setUp()
+        self.config = {"path_username": "userName"}
+        source = mock.Mock()
+        source.conf = self.config
+        self.parser = scimsource.ScimShadowMapParser(source)
+
+    def testReadEntryValidUser(self):
+        """Test _ReadEntry with valid user data."""
+        user_data = {
+            "userName": "testuser",
+            "id": "1001"
+        }
+        
+        entry = self.parser._ReadEntry(user_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.passwd, "*")
+        # All other shadow fields should be empty strings
+        self.assertEqual(entry.lstchg, "")
+        self.assertEqual(entry.min, "")
+        self.assertEqual(entry.max, "")
+        self.assertEqual(entry.warn, "")
+        self.assertEqual(entry.inact, "")
+        self.assertEqual(entry.expire, "")
+        self.assertEqual(entry.flag, "")
+
+    def testReadEntryMissingUsername(self):
+        """Test _ReadEntry with missing username field."""
+        user_data = {
+            "id": "1002"
+        }
+        
+        entry = self.parser._ReadEntry(user_data)
+        
+        self.assertIsNone(entry)
+
+    def testReadEntryWithCustomUsernamePath(self):
+        """Test _ReadEntry with custom username path."""
+        custom_config = {"path_username": "urn:scim:schemas:extension:User/userName"}
+        source = mock.Mock()
+        source.conf = custom_config
+        parser = scimsource.ScimShadowMapParser(source)
+        
+        user_data = {
+            "urn:scim:schemas:extension:User": {
+                "userName": "customuser"
+            },
+            "id": "1003"
+        }
+        
+        entry = parser._ReadEntry(user_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "customuser")
+        self.assertEqual(entry.passwd, "*")
+
+    def testReadEntryWithCustomShadowDefaults(self):
+        """Test _ReadEntry with custom shadow field defaults."""
+        custom_config = {
+            "shadow_default_lstchg": "19000",
+            "shadow_default_min": "0", 
+            "shadow_default_max": "99999",
+            "shadow_default_warn": "7",
+            "shadow_default_inact": "30",
+            "shadow_default_expire": "20000",
+            "shadow_default_flag": "0"
+        }
+        source = mock.Mock()
+        source.conf = custom_config
+        parser = scimsource.ScimShadowMapParser(source)
+        
+        user_data = {
+            "userName": "testuser",
+            "id": "1001"
+        }
+        
+        entry = parser._ReadEntry(user_data)
+        
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.passwd, "*")
+        # Verify custom shadow field defaults are used
+        self.assertEqual(entry.lstchg, "19000")
+        self.assertEqual(entry.min, "0")
+        self.assertEqual(entry.max, "99999")
+        self.assertEqual(entry.warn, "7")
+        self.assertEqual(entry.inact, "30")
+        self.assertEqual(entry.expire, "20000")
+        self.assertEqual(entry.flag, "0")
 
 if __name__ == "__main__":
     unittest.main()
