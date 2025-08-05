@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from nss_cache import error
 from nss_cache.maps import group
 from nss_cache.maps import passwd
+from nss_cache.maps import shadow
 from nss_cache.maps import sshkey
 from nss_cache.sources import source
 from nss_cache.sources.httpsource import UpdateGetter as HttpUpdateGetter
@@ -160,6 +161,20 @@ class ScimSource(source.Source):
         base_users_url = f"{self.conf['base_url']}/{self.conf['users_endpoint']}"
         users_url = self._BuildUrlWithParameters(base_users_url, self.conf.get('users_parameters', ''))
         return SshkeyUpdateGetter(self.conf).GetUpdates(self, users_url, since)
+
+    def GetShadowMap(self, since=None):
+        """Return the shadow map from this source.
+
+        Args:
+          since: Get data only changed since this timestamp (inclusive) or None
+          for all data.
+
+        Returns:
+          instance of shadow.ShadowMap
+        """
+        base_users_url = f"{self.conf['base_url']}/{self.conf['users_endpoint']}"
+        users_url = self._BuildUrlWithParameters(base_users_url, self.conf.get('users_parameters', ''))
+        return ShadowUpdateGetter(self.conf).GetUpdates(self, users_url, since)
 
 class UpdateGetter(HttpUpdateGetter):
     """SCIM-specific update getter that extends HTTP functionality."""
@@ -689,3 +704,56 @@ class ScimGroupMapParser(ScimMapParser):
                     members.append(member)
 
         return members
+
+
+class ShadowUpdateGetter(UpdateGetter):
+    """Get Shadow updates from the SCIM Source."""
+
+    def __init__(self, conf):
+        """Initialize with configuration."""
+        super().__init__()
+        self.conf = conf
+
+    def GetParser(self):
+        """Returns a MapParser to parse SCIM shadow cache."""
+        return ScimShadowMapParser(self.source)
+
+    def CreateMap(self):
+        """Returns a new ShadowMap instance to have ShadowMapEntries added to it."""
+        return shadow.ShadowMap()
+
+
+class ScimShadowMapParser(ScimMapParser):
+    """A MapParser for SCIM shadow map data."""
+
+    def _ReadEntry(self, user_data):
+        """Return a ShadowMapEntry from a SCIM user resource."""
+        username_path = self._GetMapConfig("scim_path_username", "userName")
+        
+        # Extract username using the configured path
+        username = self._ExtractFromPath(user_data, username_path)
+        if not username:
+            # Fallback to default userName field
+            username = user_data.get("userName")
+        
+        if not username:
+            self.log.warning("Could not extract username from SCIM user object")
+            return None
+        
+        shadow_ent = shadow.ShadowMapEntry()
+        shadow_ent.name = username
+        
+        # Set shadow password to * since SCIM doesn't provide password data
+        # This indicates authentication is handled elsewhere
+        shadow_ent.passwd = "*"
+        
+        # Set other shadow fields using configurable defaults
+        shadow_ent.lstchg = self._GetMapConfig("scim_shadow_default_lstchg", "")  # Last password change
+        shadow_ent.min = self._GetMapConfig("scim_shadow_default_min", "")     # Minimum password age
+        shadow_ent.max = self._GetMapConfig("scim_shadow_default_max", "")     # Maximum password age  
+        shadow_ent.warn = self._GetMapConfig("scim_shadow_default_warn", "")   # Password warning period
+        shadow_ent.inact = self._GetMapConfig("scim_shadow_default_inact", "") # Password inactivity period
+        shadow_ent.expire = self._GetMapConfig("scim_shadow_default_expire", "") # Account expiration date
+        shadow_ent.flag = self._GetMapConfig("scim_shadow_default_flag", "")   # Reserved field
+
+        return shadow_ent

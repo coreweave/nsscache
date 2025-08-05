@@ -407,7 +407,7 @@ scim_path_home_directory configuration and SCIM response data.
 
 The following path configuration options allow customization of how data is
 extracted from SCIM responses. These can be set per-map in
-[passwd], [group], or [sshkey] sections:
+[passwd], [group], [shadow], or [sshkey] sections:
 
 .TP
 .B scim_path_username
@@ -437,6 +437,47 @@ uses the scim_default_shell value.
 .B scim_path_ssh_keys
 Path within SCIM user resources to extract SSH public keys. Should point to
 an array of SSH key strings or a single SSH key string.
+
+.PP
+The shadow map uses user data from the SCIM users endpoint and creates
+shadow(5) format entries. It only requires scim_path_username configuration
+in the [shadow] section, as other shadow fields (password aging, etc.) are
+not typically available from SCIM sources. All shadow entries are created
+in the format: username:*::::::: where '*' indicates that authentication
+is handled elsewhere (not via local password files).
+
+The following optional configuration parameters can be set in the [shadow]
+section to provide default values for shadow fields:
+
+.TP
+.B scim_shadow_default_lstchg
+Default value for the last password change field (days since Jan 1, 1970).
+Defaults to empty string.
+
+.TP
+.B scim_shadow_default_min
+Default value for the minimum password age field (days). Defaults to empty string.
+
+.TP
+.B scim_shadow_default_max
+Default value for the maximum password age field (days). Defaults to empty string.
+
+.TP
+.B scim_shadow_default_warn
+Default value for the password warning period field (days). Defaults to empty string.
+
+.TP
+.B scim_shadow_default_inact
+Default value for the password inactivity period field (days). Defaults to empty string.
+
+.TP
+.B scim_shadow_default_expire
+Default value for the account expiration date field (days since Jan 1, 1970).
+Defaults to empty string.
+
+.TP
+.B scim_shadow_default_flag
+Default value for the reserved flag field. Defaults to empty string.
 
 .SH files CACHE OPTIONS
 These options configure the behaviour of the
