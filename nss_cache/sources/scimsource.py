@@ -571,6 +571,18 @@ class ScimPasswdMapParser(ScimMapParser):
         return default_shell
 
 
+class UniqueSshkeyMapEntry(sshkey.SshkeyMapEntry):
+    """SSH key map entry that uses composite key to allow multiple keys per user."""
+
+    def Key(self):
+        """Return a composite key that includes both username and SSH key.
+        
+        This allows multiple SSH keys for the same user to coexist in the map.
+        """
+        # Use a composite key of username + ssh key to make each entry unique
+        return f"{self.name}:{self.sshkey}"
+
+
 class ScimSshkeyMapParser(ScimMapParser):
     """Class for parsing SCIM Users into sshkey cache."""
 
@@ -579,7 +591,7 @@ class ScimSshkeyMapParser(ScimMapParser):
         super().__init__(source)
 
     def _ReadEntry(self, user_data):
-        """Return SshkeyMapEntry instances from a SCIM user resource."""
+        """Return UniqueSshkeyMapEntry instances from a SCIM user resource."""
         entries = []
 
         # Extract username using configurable path
@@ -604,10 +616,10 @@ class ScimSshkeyMapParser(ScimMapParser):
         elif not isinstance(ssh_keys, list):
             ssh_keys = []
 
-        # Create an entry for each SSH key
+        # Create an entry for each SSH key using our custom entry class
         for ssh_key in ssh_keys:
             if ssh_key and ssh_key.strip():
-                map_entry = sshkey.SshkeyMapEntry()
+                map_entry = UniqueSshkeyMapEntry()
                 map_entry.name = username
                 map_entry.sshkey = ssh_key.strip()
                 entries.append(map_entry)
