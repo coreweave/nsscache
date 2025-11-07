@@ -604,16 +604,19 @@ class ScimSshkeyMapParser(ScimMapParser):
         elif not isinstance(ssh_keys, list):
             ssh_keys = []
 
-        # Create an entry for each SSH key
-        for ssh_key in ssh_keys:
-            if ssh_key and ssh_key.strip():
-                map_entry = sshkey.SshkeyMapEntry()
-                map_entry.name = username
-                map_entry.sshkey = ssh_key.strip()
-                entries.append(map_entry)
+        # Filter out empty keys and strip whitespace
+        valid_keys = [key.strip() for key in ssh_keys if key and key.strip()]
 
-        if ssh_keys:
-            self.log.debug("Extracted %d SSH keys for user %s", len(ssh_keys), username)
+        # Create a single entry with all SSH keys as a list
+        map_entry = sshkey.SshkeyMapEntry()
+        map_entry.name = username
+        if valid_keys:
+            map_entry.sshkey = valid_keys
+        else:
+            # Always create an entry, even if no keys
+            map_entry.sshkey = ""
+        self.log.debug("Extracted %d SSH keys for user %s", len(valid_keys), username)
+        entries.append(map_entry)
 
         return entries
 
