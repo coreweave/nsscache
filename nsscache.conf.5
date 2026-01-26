@@ -424,6 +424,13 @@ Path within SCIM user resources to extract the user ID (UID). Defaults to
 Path within SCIM user/group resources to extract the group ID (GID).
 
 .TP
+.B scim_path_groupname
+Path within SCIM group resources to extract the preferred group name. This can be
+used when the SCIM server provides a custom field for group names.
+If not specified or the path returns no value, nsscache will fall
+back to using displayName, name, or id from the SCIM group resource.
+
+.TP
 .B scim_path_home_directory
 Path within SCIM user resources to extract the home directory. If not specified,
 defaults to /home/username format.
