@@ -631,10 +631,8 @@ class ScimGroupMapParser(ScimMapParser):
     def _ReadEntry(self, group_data):
         """Return a GroupMapEntry from a SCIM group resource."""
 
-        # Use displayName or fallback to other name fields
-        group_name = (group_data.get("displayName") or
-                     group_data.get("name") or
-                     group_data.get("id"))
+        # Extract group name using configurable path
+        group_name = self._ExtractGroupName(group_data)
 
         if not group_name:
             self.log.warning("SCIM group missing name, skipping")
@@ -656,6 +654,21 @@ class ScimGroupMapParser(ScimMapParser):
         map_entry.members = members
 
         return map_entry
+
+    def _ExtractGroupName(self, group_data):
+        """Extract group name using configurable path."""
+        groupname_path = self._GetMapConfig("scim_path_groupname", "")
+
+        # Try the configured path first
+        if groupname_path:
+            name = self._ExtractFromPath(group_data, groupname_path)
+            if name:
+                return name
+
+        # Fallback to standard SCIM name fields
+        return (group_data.get("displayName") or
+                group_data.get("name") or
+                group_data.get("id"))
 
     def _ExtractGroupGid(self, group_data):
         """Extract GID from SCIM group data using configurable path."""
