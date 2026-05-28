@@ -85,6 +85,39 @@ class ScimSource(source.Source):
         if "auth_token" not in configuration:
             configuration["auth_token"] = os.environ.get('NSSCACHE_SCIM_AUTH_TOKEN', self.AUTH_TOKEN)
 
+    def CanonicalGroupNames(self):
+        """Return a {lower_case_name: configured_case_name} map.
+
+        Names are harvested from ``groups_parameters`` and ``users_parameters``
+        (every ``key=value`` pair, split on ``,``). The configured case is
+        treated as canonical so the on-disk cache matches what the operator
+        typed in nsscache.conf, regardless of how the IdP cases displayName.
+        First writer per lower-case key wins.
+        """
+        if getattr(self, "_canonical_group_names_cache", None) is not None:
+            return self._canonical_group_names_cache
+
+        canonical = {}
+        for params_key in ("groups_parameters", "users_parameters"):
+            raw = self.conf.get(params_key, "")
+            if not raw or not raw.strip():
+                continue
+            clean = raw.strip().lstrip("?&")
+            if not clean:
+                continue
+            for param in clean.split("&"):
+                if "=" not in param:
+                    continue
+                _key, value = param.split("=", 1)
+                for candidate in value.split(","):
+                    candidate = candidate.strip()
+                    if not candidate:
+                        continue
+                    canonical.setdefault(candidate.lower(), candidate)
+
+        self._canonical_group_names_cache = canonical
+        return canonical
+
     def _BuildUrlWithParameters(self, base_url, parameters):
         """Build URL with custom parameters, handling proper encoding.
 
@@ -656,7 +689,28 @@ class ScimGroupMapParser(ScimMapParser):
         return map_entry
 
     def _ExtractGroupName(self, group_data):
-        """Extract group name using configurable path."""
+        """Extract group name, canonicalized to the case configured in SCIM URL parameters."""
+        name = self._ExtractGroupNameRaw(group_data)
+        if not name:
+            return name
+
+        get_canonical = getattr(self.source, "CanonicalGroupNames", None) if self.source else None
+        if callable(get_canonical):
+            canonical_by_lower = get_canonical()
+            if isinstance(canonical_by_lower, dict):
+                canonical = canonical_by_lower.get(name.lower())
+                if isinstance(canonical, str) and canonical and canonical != name:
+                    self.log.info(
+                        "rewriting SCIM group %r to canonical %r from SCIM URL parameters",
+                        name,
+                        canonical,
+                    )
+                    return canonical
+
+        return name
+
+    def _ExtractGroupNameRaw(self, group_data):
+        """Return the raw SCIM group name (no canonicalization)."""
         groupname_path = self._GetMapConfig("scim_path_groupname", "")
 
         # Try the configured path first

@@ -647,7 +647,11 @@ class TestScimSshkeyMapParser(unittest.TestCase):
         self.parser = scimsource.ScimSshkeyMapParser(self.mock_source)
 
     def testReadEntryWithSshKeys(self):
-        """Test _ReadEntry with SSH keys."""
+        """Test _ReadEntry emits one entry per user with all keys as a list.
+
+        Matches the LDAP source behavior and Format 2 documented in
+        examples/authorized-keys-command.py (``username:['key1', 'key2']``).
+        """
         user_data = {
             "userName": "testuser",
             "sshKeys": [
@@ -655,13 +659,16 @@ class TestScimSshkeyMapParser(unittest.TestCase):
                 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host2"
             ]
         }
-        
+
         entries = self.parser._ReadEntry(user_data)
-        
-        self.assertEqual(len(entries), 2)
-        for entry in entries:
-            self.assertEqual(entry.name, "testuser")
-            self.assertTrue(entry.sshkey.startswith("ssh-"))
+
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.name, "testuser")
+        self.assertIsInstance(entry.sshkey, list)
+        self.assertEqual(len(entry.sshkey), 2)
+        for key in entry.sshkey:
+            self.assertTrue(key.startswith("ssh-"))
 
     def testReadEntryNoSshKeysPath(self):
         """Test _ReadEntry when SSH keys path is not configured."""
@@ -796,6 +803,150 @@ class TestScimGroupMapParser(unittest.TestCase):
         self.assertEqual(entry.name, "testgroup7")
         self.assertEqual(entry.gid, 2007)
         self.assertEqual(entry.members, [])
+
+    def _MakeSource(self, **extra):
+        """Build a ScimSource with the standard per-map paths plus extras."""
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            "path_gid": "id",
+            "path_username": "members/value",
+        }
+        config.update(extra)
+        return scimsource.ScimSource(config)
+
+    def testReadEntryCanonicalizesGroupNameFromGroupsParameters(self):
+        """displayName is rewritten to the case in groups_parameters."""
+        source = self._MakeSource(
+            groups_parameters="name=Upper-Case",
+        )
+        parser = scimsource.ScimGroupMapParser(source)
+
+        entry = parser._ReadEntry({
+            "id": "3001",
+            "displayName": "upper-case",
+            "members": [{"value": "alice"}, {"value": "bob"}],
+        })
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "Upper-Case")
+        self.assertEqual(entry.members, ["alice", "bob"])
+
+    def testReadEntryCanonicalizesGroupNameFromUsersParameters(self):
+        """displayName is rewritten using a name found in users_parameters."""
+        source = self._MakeSource(
+            users_parameters='filter=active eq "true"&name=Upper-Case',
+        )
+        parser = scimsource.ScimGroupMapParser(source)
+
+        entry = parser._ReadEntry({
+            "id": "3002",
+            "displayName": "UPPER-CASE",
+            "members": [],
+        })
+
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.name, "Upper-Case")
+
+    def testReadEntryCanonicalizesMultipleCommaSeparatedGroupNames(self):
+        """Comma-separated names in a single param all canonicalize."""
+        source = self._MakeSource(
+            groups_parameters="name=Upper-Case,LowerCase",
+        )
+        parser = scimsource.ScimGroupMapParser(source)
+
+        first = parser._ReadEntry({
+            "id": "3003",
+            "displayName": "upper-case",
+            "members": [],
+        })
+        second = parser._ReadEntry({
+            "id": "3004",
+            "displayName": "LOWERCASE",
+            "members": [],
+        })
+
+        self.assertEqual(first.name, "Upper-Case")
+        self.assertEqual(second.name, "LowerCase")
+
+    def testReadEntryPassthroughWhenNoMatchingParameter(self):
+        """Names with no case-insensitive match in params are unchanged."""
+        source = self._MakeSource(
+            groups_parameters="name=Upper-Case",
+        )
+        parser = scimsource.ScimGroupMapParser(source)
+
+        entry = parser._ReadEntry({
+            "id": "3005",
+            "displayName": "unrelated",
+            "members": [],
+        })
+
+        self.assertEqual(entry.name, "unrelated")
+
+    def testReadEntryPassthroughWhenNoParametersConfigured(self):
+        """displayName is preserved as-is when no parameters are configured."""
+        source = self._MakeSource()
+        parser = scimsource.ScimGroupMapParser(source)
+
+        entry = parser._ReadEntry({
+            "id": "3006",
+            "displayName": "Some-Group",
+            "members": [],
+        })
+
+        self.assertEqual(entry.name, "Some-Group")
+
+    def testCanonicalGroupNamesParsesBothParameterStrings(self):
+        """ScimSource.CanonicalGroupNames combines users_ and groups_parameters."""
+        source = scimsource.ScimSource({
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            "groups_parameters": "name=Upper-Case",
+            "users_parameters": 'filter=active eq "true"&name=Mixed-Case,Other',
+        })
+
+        result = source.CanonicalGroupNames()
+
+        self.assertEqual(result["upper-case"], "Upper-Case")
+        self.assertEqual(result["mixed-case"], "Mixed-Case")
+        self.assertEqual(result["other"], "Other")
+
+    def testCanonicalGroupNamesIsCached(self):
+        """The canonical map is computed once and cached on the source."""
+        source = scimsource.ScimSource({
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            "groups_parameters": "name=Upper-Case",
+        })
+
+        first = source.CanonicalGroupNames()
+        second = source.CanonicalGroupNames()
+
+        self.assertIs(first, second)
+        self.assertEqual(first["upper-case"], "Upper-Case")
+
+    def testCanonicalGroupNamesEmptyWhenNoParameters(self):
+        """No parameters configured yields an empty canonical map."""
+        source = scimsource.ScimSource({
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+        })
+
+        self.assertEqual(source.CanonicalGroupNames(), {})
+
+    def testCanonicalGroupNamesFirstWriterWins(self):
+        """If both params spell the same name with different cases, the first wins."""
+        source = scimsource.ScimSource({
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            "groups_parameters": "name=Upper-Case",
+            "users_parameters": "name=UPPER-CASE",
+        })
+
+        result = source.CanonicalGroupNames()
+
+        self.assertEqual(result["upper-case"], "Upper-Case")
 
 
 class TestScimShadowMapParser(unittest.TestCase):
