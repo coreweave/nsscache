@@ -837,21 +837,28 @@ class TestScimSshkeyMapParser(unittest.TestCase):
         self.parser = scimsource.ScimSshkeyMapParser(self.mock_source)
 
     def testReadEntryWithSshKeys(self):
-        """Test _ReadEntry with SSH keys."""
+        """Test _ReadEntry returns a single entry whose sshkey is the list of keys.
+
+        FilesSshkeyMapHandler._WriteData later serializes ``entry.sshkey`` into
+        a single cache line per user, so the parser bundles every key for a
+        user into one SshkeyMapEntry rather than fanning out to one entry per
+        key.
+        """
+        ssh_keys = [
+            "ssh-rsa AAAAB3NzaC1yc2EAAAA... user@host1",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host2",
+        ]
         user_data = {
             "userName": "testuser",
-            "sshKeys": [
-                "ssh-rsa AAAAB3NzaC1yc2EAAAA... user@host1",
-                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host2"
-            ]
+            "sshKeys": ssh_keys,
         }
-        
+
         entries = self.parser._ReadEntry(user_data)
-        
-        self.assertEqual(len(entries), 2)
-        for entry in entries:
-            self.assertEqual(entry.name, "testuser")
-            self.assertTrue(entry.sshkey.startswith("ssh-"))
+
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.sshkey, ssh_keys)
 
     def testReadEntryNoSshKeysPath(self):
         """Test _ReadEntry when SSH keys path is not configured."""
