@@ -5,7 +5,7 @@ import logging
 import pycurl
 import os
 from io import StringIO
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qs
 
 from nss_cache import error
 from nss_cache.maps import group
@@ -14,6 +14,34 @@ from nss_cache.maps import shadow
 from nss_cache.maps import sshkey
 from nss_cache.sources import source
 from nss_cache.sources.httpsource import UpdateGetter as HttpUpdateGetter
+
+
+def _UrlHasCursorParam(url):
+    """Return True if the URL has a `cursor` query parameter (any value).
+
+    Used to detect that the operator opted into cursor-based pagination by
+    including `cursor` in the configured query parameters. `parse_qs` already
+    handles an empty query, multiple `cursor=` occurrences, and bare `cursor`
+    (no `=value`) via `keep_blank_values=True`, so a single membership check
+    covers every case without enumerating the rest of the query.
+    """
+    return "cursor" in parse_qs(urlsplit(url).query, keep_blank_values=True)
+
+
+def _SetCursorParam(url, token):
+    """Return a copy of `url` with the `cursor` query parameter set to `token`.
+
+    Symmetric with `_UrlHasCursorParam`: parse the query into a dict, assign
+    the new value unconditionally, and re-encode. Preserves all other query
+    parameters, blank values, encoded characters (like quoted SCIM filters),
+    and original parameter order (Python dicts preserve insertion order, so
+    an existing `cursor` keeps its slot and a new one is appended).
+    """
+    parts = urlsplit(url)
+    params = parse_qs(parts.query, keep_blank_values=True)
+    params["cursor"] = [token]
+    new_query = urlencode(params, doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
 def RegisterImplementation(registration_callback):
@@ -198,11 +226,31 @@ class UpdateGetter(HttpUpdateGetter):
 
         # Initialize the parser with the source
         parser = self.GetParser()
-        
-        # Initialize pagination variables
-        current_start_index = 1
+
         page_map = self.CreateMap()
-        
+
+        # Cursor-based pagination: opt-in via a `cursor` query parameter on
+        # the configured URL. Each response carries `nextCursor` until the
+        # final page, which omits it.
+        if _UrlHasCursorParam(url):
+            current_url = url
+            while True:
+                scim_body_bytes, _ = self.FetchUrlData(source, current_url, since)
+                page_map = parser.GetMap(cache_info=scim_body_bytes, data=page_map)
+
+                next_cursor = parser._pagination_metadata.get('nextCursor')
+                if not next_cursor:
+                    break
+
+                # Rewrite off the original URL so we never accumulate stale
+                # cursor= segments from prior iterations.
+                current_url = _SetCursorParam(url, next_cursor)
+
+            return page_map or self.CreateMap()
+
+        # Legacy startIndex/totalResults pagination.
+        current_start_index = 1
+
         # Use do-while pattern to fetch all pages
         while True:
             # Build URL with pagination parameters
@@ -381,6 +429,7 @@ class ScimMapParser(object):
                 'totalResults': scim_response.get('totalResults', 0),
                 'itemsPerPage': scim_response.get('itemsPerPage', 0),
                 'startIndex': scim_response.get('startIndex', 1),
+                'nextCursor': scim_response.get('nextCursor'),
             }
 
             # SCIM responses have a "Resources" array
