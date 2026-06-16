@@ -356,6 +356,267 @@ class TestScimUpdateGetter(unittest.TestCase):
             self.assertIn("groups=users,admin", call_args[1][0][0])
             self.assertIn("startIndex=51", call_args[1][0][0])
 
+    def testGetUpdatesWithCursorPagination(self):
+        """Cursor pagination walks pages off `nextCursor` until it's omitted."""
+        mock_conn = mock.Mock()
+        mock_conn.getinfo.return_value = 200
+        self.curl_mock.return_value = mock_conn
+
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token"
+        }
+        source = scimsource.ScimSource(config)
+
+        # Three pages of one user each. The first two responses carry a
+        # `nextCursor`; the third omits it to signal completion.
+        page_responses = [
+            {
+                "Resources": [{"id": "1", "userName": "user1"}],
+                "nextCursor": "token-page-2",
+            },
+            {
+                "Resources": [{"id": "2", "userName": "user2"}],
+                "nextCursor": "token-page-3",
+            },
+            {
+                "Resources": [{"id": "3", "userName": "user3"}],
+            },
+        ]
+
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.side_effect = [
+                (200, "", json.dumps(resp).encode('utf-8'))
+                for resp in page_responses
+            ]
+
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+
+            mock_parser = mock.Mock()
+            mock_map = mock.Mock()
+            mock_map.__len__ = mock.Mock(return_value=3)
+
+            call_count = 0
+
+            def mock_get_map(cache_info, data):
+                nonlocal call_count
+                response = page_responses[call_count]
+                call_count += 1
+                mock_parser._pagination_metadata = {
+                    'totalResults': 0,
+                    'itemsPerPage': 0,
+                    'startIndex': 1,
+                    'nextCursor': response.get('nextCursor'),
+                }
+                return mock_map
+
+            mock_parser.GetMap = mock.Mock(side_effect=mock_get_map)
+            getter.GetParser = mock.Mock(return_value=mock_parser)
+            getter.CreateMap = mock.Mock(return_value=mock.Mock())
+
+            getter.GetUpdates(source, "https://api.example.com/scim/Users?count=1&cursor=", None)
+
+            self.assertEqual(mock_curl_fetch.call_count, 3)
+            self.assertEqual(mock_parser.GetMap.call_count, 3)
+
+            call_args = mock_curl_fetch.call_args_list
+            # First request is the original URL — cursor= with no token.
+            self.assertIn("cursor=", call_args[0][0][0])
+            self.assertNotIn("cursor=token-", call_args[0][0][0])
+
+            # Subsequent requests carry the cursor returned by the prior page.
+            self.assertIn("cursor=token-page-2", call_args[1][0][0])
+            self.assertIn("cursor=token-page-3", call_args[2][0][0])
+
+            # startIndex must never be appended in cursor mode.
+            for call in call_args:
+                self.assertNotIn("startIndex=", call[0][0])
+
+    def testGetUpdatesWithCursorPaginationSinglePage(self):
+        """When the first cursor response omits `nextCursor`, stop after one fetch."""
+        mock_conn = mock.Mock()
+        mock_conn.getinfo.return_value = 200
+        self.curl_mock.return_value = mock_conn
+
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token"
+        }
+        source = scimsource.ScimSource(config)
+
+        single_page_response = {
+            "Resources": [{"id": "1", "userName": "user1"}],
+        }
+
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.side_effect = [
+                (200, "", json.dumps(single_page_response).encode('utf-8'))
+            ]
+
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+
+            mock_parser = mock.Mock()
+            mock_map = mock.Mock()
+            mock_map.__len__ = mock.Mock(return_value=1)
+
+            def mock_get_map(cache_info, data):
+                mock_parser._pagination_metadata = {
+                    'totalResults': 0,
+                    'itemsPerPage': 0,
+                    'startIndex': 1,
+                    'nextCursor': None,
+                }
+                return mock_map
+
+            mock_parser.GetMap = mock.Mock(side_effect=mock_get_map)
+            getter.GetParser = mock.Mock(return_value=mock_parser)
+            getter.CreateMap = mock.Mock(return_value=mock.Mock())
+
+            getter.GetUpdates(source, "https://api.example.com/scim/Users?cursor=", None)
+
+            self.assertEqual(mock_curl_fetch.call_count, 1)
+            self.assertEqual(mock_parser.GetMap.call_count, 1)
+
+    def testGetUpdatesWithCursorPreservesCustomParams(self):
+        """Cursor rewrites preserve other query parameters across requests."""
+        mock_conn = mock.Mock()
+        mock_conn.getinfo.return_value = 200
+        self.curl_mock.return_value = mock_conn
+
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token"
+        }
+        source = scimsource.ScimSource(config)
+
+        page_responses = [
+            {
+                "Resources": [{"id": "1", "userName": "user1"}],
+                "nextCursor": "next-token",
+            },
+            {
+                "Resources": [{"id": "2", "userName": "user2"}],
+            },
+        ]
+
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.side_effect = [
+                (200, "", json.dumps(resp).encode('utf-8'))
+                for resp in page_responses
+            ]
+
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+
+            mock_parser = mock.Mock()
+            mock_map = mock.Mock()
+            mock_map.__len__ = mock.Mock(return_value=2)
+
+            call_count = 0
+
+            def mock_get_map(cache_info, data):
+                nonlocal call_count
+                response = page_responses[call_count]
+                call_count += 1
+                mock_parser._pagination_metadata = {
+                    'totalResults': 0,
+                    'itemsPerPage': 0,
+                    'startIndex': 1,
+                    'nextCursor': response.get('nextCursor'),
+                }
+                return mock_map
+
+            mock_parser.GetMap = mock.Mock(side_effect=mock_get_map)
+            getter.GetParser = mock.Mock(return_value=mock_parser)
+            getter.CreateMap = mock.Mock(return_value=mock.Mock())
+
+            # Pass an already-encoded filter (matching what _BuildUrlWithParameters
+            # produces at the source call site).
+            initial_url = 'https://api.example.com/scim/Users?filter=active+eq+%22true%22&cursor='
+            getter.GetUpdates(source, initial_url, None)
+
+            self.assertEqual(mock_curl_fetch.call_count, 2)
+
+            call_args = mock_curl_fetch.call_args_list
+            # The second request must keep the filter param alongside the new cursor.
+            second_url = call_args[1][0][0]
+            self.assertIn("filter=", second_url)
+            self.assertIn("active", second_url)
+            self.assertIn("cursor=next-token", second_url)
+
+    def testGetUpdatesWithCursorPaginationSafetyBound(self):
+        """A server that never returns a null nextCursor must not loop forever.
+
+        Also verifies the bound is configurable via `scim_max_cursor_pages` in
+        nsscache.conf (surfaced as `max_cursor_pages` in the source's conf
+        dict) and that string values from INI files are coerced to int.
+        """
+        mock_conn = mock.Mock()
+        mock_conn.getinfo.return_value = 200
+        self.curl_mock.return_value = mock_conn
+
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            # Shrink the bound so the test runs in milliseconds. Passed as a
+            # string to mirror how INI-loaded config arrives, exercising the
+            # int() cast in UpdateGetter.GetUpdates.
+            "max_cursor_pages": "3",
+        }
+        source = scimsource.ScimSource(config)
+
+        # Every response carries a non-None nextCursor, simulating a buggy server.
+        always_paginating_response = {
+            "Resources": [{"id": "1", "userName": "user1"}],
+            "nextCursor": "endless-token",
+        }
+
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.return_value = (
+                200, "", json.dumps(always_paginating_response).encode('utf-8')
+            )
+
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+
+            mock_parser = mock.Mock()
+            mock_map = mock.Mock()
+            mock_map.__len__ = mock.Mock(return_value=1)
+
+            def mock_get_map(cache_info, data):
+                mock_parser._pagination_metadata = {
+                    'totalResults': 0,
+                    'itemsPerPage': 0,
+                    'startIndex': 1,
+                    'nextCursor': 'endless-token',
+                }
+                return mock_map
+
+            mock_parser.GetMap = mock.Mock(side_effect=mock_get_map)
+            getter.GetParser = mock.Mock(return_value=mock_parser)
+            getter.CreateMap = mock.Mock(return_value=mock.Mock())
+
+            with self.assertRaises(error.Error) as ctx:
+                getter.GetUpdates(source, "https://api.example.com/scim/Users?cursor=", None)
+
+            self.assertIn("did not terminate", str(ctx.exception))
+            # The bound is inclusive: exactly max_cursor_pages fetches happen,
+            # then the loop exhausts and raises.
+            self.assertEqual(mock_curl_fetch.call_count, 3)
+            self.assertEqual(mock_parser.GetMap.call_count, 3)
+
+    def testScimSourceDefaultsMaxCursorPages(self):
+        """ScimSource._SetDefaults populates max_cursor_pages from the class constant."""
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+        }
+        source = scimsource.ScimSource(config)
+        self.assertEqual(source.conf["max_cursor_pages"], scimsource.ScimSource.MAX_CURSOR_PAGES)
+        self.assertEqual(source.conf["max_cursor_pages"], 500)
+
 
 class TestScimPasswdUpdateGetter(unittest.TestCase):
     def setUp(self):
@@ -647,21 +908,28 @@ class TestScimSshkeyMapParser(unittest.TestCase):
         self.parser = scimsource.ScimSshkeyMapParser(self.mock_source)
 
     def testReadEntryWithSshKeys(self):
-        """Test _ReadEntry with SSH keys."""
+        """Test _ReadEntry returns a single entry whose sshkey is the list of keys.
+
+        FilesSshkeyMapHandler._WriteData later serializes ``entry.sshkey`` into
+        a single cache line per user, so the parser bundles every key for a
+        user into one SshkeyMapEntry rather than fanning out to one entry per
+        key.
+        """
+        ssh_keys = [
+            "ssh-rsa AAAAB3NzaC1yc2EAAAA... user@host1",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host2",
+        ]
         user_data = {
             "userName": "testuser",
-            "sshKeys": [
-                "ssh-rsa AAAAB3NzaC1yc2EAAAA... user@host1",
-                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host2"
-            ]
+            "sshKeys": ssh_keys,
         }
-        
+
         entries = self.parser._ReadEntry(user_data)
-        
-        self.assertEqual(len(entries), 2)
-        for entry in entries:
-            self.assertEqual(entry.name, "testuser")
-            self.assertTrue(entry.sshkey.startswith("ssh-"))
+
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.name, "testuser")
+        self.assertEqual(entry.sshkey, ssh_keys)
 
     def testReadEntryNoSshKeysPath(self):
         """Test _ReadEntry when SSH keys path is not configured."""
