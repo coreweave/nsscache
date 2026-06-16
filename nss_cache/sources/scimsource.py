@@ -60,6 +60,7 @@ class ScimSource(source.Source):
     RETRY_DELAY = 5
     RETRY_MAX = 3
     DEFAULT_SHELL = "/bin/bash"
+    MAX_CURSOR_PAGES = 500
 
     # for registration
     name = "scim"
@@ -108,6 +109,8 @@ class ScimSource(source.Source):
             configuration["retry_delay"] = self.RETRY_DELAY
         if "retry_max" not in configuration:
             configuration["retry_max"] = self.RETRY_MAX
+        if "max_cursor_pages" not in configuration:
+            configuration["max_cursor_pages"] = self.MAX_CURSOR_PAGES
         if "default_shell" not in configuration:
             configuration["default_shell"] = self.DEFAULT_SHELL
         if "auth_token" not in configuration:
@@ -230,11 +233,15 @@ class UpdateGetter(HttpUpdateGetter):
         page_map = self.CreateMap()
 
         # Cursor-based pagination: opt-in via a `cursor` query parameter on
-        # the configured URL. Each response carries `nextCursor` until the
-        # final page, which omits it.
+        # the configured URL. Per the SCIM cursor-pagination convention, each
+        # response carries a `nextCursor` token until the final page, which
+        # omits the field entirely. Bounded by the SCIM source's `max_cursor_pages` setting as a
+        # safety net against a server that never stops paginating; raise it
+        # via `scim_max_cursor_pages` in nsscache.conf.
         if _UrlHasCursorParam(url):
+            max_pages = int(source.conf.get("max_cursor_pages", ScimSource.MAX_CURSOR_PAGES))
             current_url = url
-            while True:
+            for _ in range(max_pages):
                 scim_body_bytes, _ = self.FetchUrlData(source, current_url, since)
                 page_map = parser.GetMap(cache_info=scim_body_bytes, data=page_map)
 
@@ -245,6 +252,11 @@ class UpdateGetter(HttpUpdateGetter):
                 # Rewrite off the original URL so we never accumulate stale
                 # cursor= segments from prior iterations.
                 current_url = _SetCursorParam(url, next_cursor)
+            else:
+                raise error.Error(
+                    f"Cursor pagination did not terminate after {max_pages} "
+                    f"pages for {url}"
+                )
 
             return page_map or self.CreateMap()
 

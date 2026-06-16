@@ -376,6 +376,26 @@ Special characters (spaces, quotes, etc.) will be automatically URL encoded.
 Example: 'filter=displayName eq users or displayName eq admin'
 
 .TP
+.B scim_max_cursor_pages
+Safety bound on the cursor-pagination loop. Opt into cursor pagination by
+including a
+.I cursor
+query parameter in
+.B scim_users_parameters
+or
+.B scim_groups_parameters
+(e.g.
+.I groups=admin&cursor
+); nsscache then walks the
+.I nextCursor
+tokens returned by the server until the field is omitted on the final page.
+This setting caps the number of pages fetched per sync as a safety net against
+a server that never stops paginating. With the SCIM default page size of 50,
+the default of 500 caps a single fetch at ~25k entries. Raise it if your
+tenant legitimately needs more pages. Defaults to
+.I 500.
+
+.TP
 .B scim_timeout
 Timeout in seconds for SCIM requests. Defaults to 60.
 

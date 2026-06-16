@@ -546,6 +546,77 @@ class TestScimUpdateGetter(unittest.TestCase):
             self.assertIn("active", second_url)
             self.assertIn("cursor=next-token", second_url)
 
+    def testGetUpdatesWithCursorPaginationSafetyBound(self):
+        """A server that never returns a null nextCursor must not loop forever.
+
+        Also verifies the bound is configurable via `scim_max_cursor_pages` in
+        nsscache.conf (surfaced as `max_cursor_pages` in the source's conf
+        dict) and that string values from INI files are coerced to int.
+        """
+        mock_conn = mock.Mock()
+        mock_conn.getinfo.return_value = 200
+        self.curl_mock.return_value = mock_conn
+
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+            # Shrink the bound so the test runs in milliseconds. Passed as a
+            # string to mirror how INI-loaded config arrives, exercising the
+            # int() cast in UpdateGetter.GetUpdates.
+            "max_cursor_pages": "3",
+        }
+        source = scimsource.ScimSource(config)
+
+        # Every response carries a non-None nextCursor, simulating a buggy server.
+        always_paginating_response = {
+            "Resources": [{"id": "1", "userName": "user1"}],
+            "nextCursor": "endless-token",
+        }
+
+        with mock.patch.object(curl, 'CurlFetch') as mock_curl_fetch:
+            mock_curl_fetch.return_value = (
+                200, "", json.dumps(always_paginating_response).encode('utf-8')
+            )
+
+            getter = scimsource.UpdateGetter()
+            getter.source = source
+
+            mock_parser = mock.Mock()
+            mock_map = mock.Mock()
+            mock_map.__len__ = mock.Mock(return_value=1)
+
+            def mock_get_map(cache_info, data):
+                mock_parser._pagination_metadata = {
+                    'totalResults': 0,
+                    'itemsPerPage': 0,
+                    'startIndex': 1,
+                    'nextCursor': 'endless-token',
+                }
+                return mock_map
+
+            mock_parser.GetMap = mock.Mock(side_effect=mock_get_map)
+            getter.GetParser = mock.Mock(return_value=mock_parser)
+            getter.CreateMap = mock.Mock(return_value=mock.Mock())
+
+            with self.assertRaises(error.Error) as ctx:
+                getter.GetUpdates(source, "https://api.example.com/scim/Users?cursor=", None)
+
+            self.assertIn("did not terminate", str(ctx.exception))
+            # The bound is inclusive: exactly max_cursor_pages fetches happen,
+            # then the loop exhausts and raises.
+            self.assertEqual(mock_curl_fetch.call_count, 3)
+            self.assertEqual(mock_parser.GetMap.call_count, 3)
+
+    def testScimSourceDefaultsMaxCursorPages(self):
+        """ScimSource._SetDefaults populates max_cursor_pages from the class constant."""
+        config = {
+            "base_url": "https://api.example.com/scim",
+            "auth_token": "test_token",
+        }
+        source = scimsource.ScimSource(config)
+        self.assertEqual(source.conf["max_cursor_pages"], scimsource.ScimSource.MAX_CURSOR_PAGES)
+        self.assertEqual(source.conf["max_cursor_pages"], 500)
+
 
 class TestScimPasswdUpdateGetter(unittest.TestCase):
     def setUp(self):
